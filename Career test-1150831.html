@@ -1,0 +1,1751 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>國中職業試探授課教師一覽表編輯器</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+        
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        /* 隱藏數字輸入框的上下箭頭以確保絕對置中不偏移 */
+        input::-webkit-outer-spin-button,
+        input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+
+        /* 強制置中樣式 */
+        .text-center {
+            text-align: center !important;
+        }
+
+        /* A4 直式列印樣式優化 */
+        @media print {
+            @page {
+                size: A4 portrait;
+                margin: 1cm !important;
+            }
+            body {
+                background-color: #ffffff;
+                color: #000000;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .print-border-thick {
+                border: 2px solid #000000 !important;
+            }
+            .print-border-thin {
+                border: 1px solid #000000 !important;
+            }
+            /* 調整直式列印的文字縮放與表格緊湊度，避免溢出直式 A4 寬度 */
+            table {
+                border-collapse: collapse !important;
+                width: 100% !important;
+                font-size: 11px !important; /* 縮小字型以適應直式 A4 寬度 */
+            }
+            th, td {
+                border: 1px solid #000000 !important;
+                padding: 4px 2px !important;
+            }
+            input, textarea, select {
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                resize: none !important;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+                font-size: 11px !important;
+            }
+            input::placeholder, textarea::placeholder {
+                color: transparent !important;
+            }
+            .print-title-input {
+                font-size: 20px !important;
+            }
+            .print-underline {
+                border-bottom: 1px solid #000000 !important;
+                display: inline-block;
+                min-width: 60px;
+                text-align: center;
+            }
+            /* 確保列印時人數等置中欄位依然生效 */
+            .text-center {
+                text-align: center !important;
+            }
+            input.text-center {
+                text-align: center !important;
+            }
+        }
+
+        /* 網頁版輸入框隱藏預設樣式以便融入表格 */
+        .table-input {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            border: none;
+            outline: none;
+            padding: 6px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .table-input:focus {
+            background-color: #f0fdf4;
+            box-shadow: inset 0 0 0 2px #22c55e;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div id="app"></div>
+
+    <!-- Firebase App & Firestore v9 (Compat version for easier integration) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <!-- React and Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // ==========================================
+        // 🔗 請在此填入您的 Google Apps Script (GAS) 部署網址 🔗
+        // ==========================================
+        const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz35TlzitUT_syhVv0MGu730o4Oe-8OadPSa0XnIpZ-U4Ph8P8QimPYzklx-t6QUrL0mg/exec";
+
+        // 計算星期工具
+        const getWeekdayName = (dateStr, short = false) => {
+            if (!dateStr) return "";
+            const date = new Date(dateStr);
+            if (isNaN(date.getTime())) return "";
+            const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+            const shortWeekdays = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+            return short ? shortWeekdays[date.getDay()] : weekdays[date.getDay()];
+        };
+
+        // 西元轉民國日期字串格式化工具
+        const formatROCDisplay = (dateStr, timeSlot) => {
+            if (!dateStr) return { date: "＿＿.＿＿.＿＿", time: "(未指定時間)" };
+            const parts = dateStr.split('-');
+            if (parts.length !== 3) return { date: dateStr, time: `(${timeSlot})` };
+            const year = parseInt(parts[0], 10) - 1911;
+            const month = parseInt(parts[1], 10);
+            const day = parseInt(parts[2], 10);
+            const weekday = getWeekdayName(dateStr);
+            
+            return {
+                date: `${year}.${month}.${day}`,
+                time: `(${weekday} ${timeSlot || ''})`
+            };
+        };
+
+        // 統計分析圖表組件
+        function AnalyticsView({ historyList }) {
+            const [dimension, setDimension] = useState("group"); // 'group' | 'school' | 'branch' | 'academicYear'
+            const [selectedYear, setSelectedYear] = useState("all");
+
+            useEffect(() => {
+                if (typeof lucide !== 'undefined') {
+                    lucide.createIcons();
+                }
+            }, [dimension, selectedYear, historyList]);
+
+            // 取得所有登場過的學年度列表供篩選
+            const availableYears = Array.from(new Set(historyList.map(item => item.academicYear))).filter(Boolean).sort();
+
+            // 依據篩選條件計算統計數據
+            const filteredHistory = historyList.filter(item => {
+                if (selectedYear !== "all" && item.academicYear !== selectedYear) return false;
+                return true;
+            });
+
+            // 指標卡片數據
+            const totalStudents = filteredHistory.reduce((acc, h) => acc + (parseInt(h.totalStudents, 10) || 0), 0);
+            const uniqueSchoolsCount = new Set(filteredHistory.map(h => h.schoolName)).size;
+            const totalBatches = filteredHistory.length;
+            const avgStudentsPerBatch = totalBatches > 0 ? Math.round(totalStudents / totalBatches) : 0;
+
+            // 計算長條圖分類數據
+            const aggregateData = () => {
+                const map = {};
+                filteredHistory.forEach(item => {
+                    if (dimension === 'school') {
+                        const key = `${item.schoolName}國中`;
+                        map[key] = (map[key] || 0) + (parseInt(item.totalStudents, 10) || 0);
+                    } else if (dimension === 'academicYear') {
+                        const key = `${item.academicYear}學年度`;
+                        map[key] = (map[key] || 0) + (parseInt(item.totalStudents, 10) || 0);
+                    } else if (dimension === 'group' || dimension === 'branch') {
+                        (item.rows || []).forEach(r => {
+                            const key = dimension === 'group' 
+                                ? (r.group?.trim() || "未填寫職群") 
+                                : (r.branch?.trim() || "未填寫科別");
+                            map[key] = (map[key] || 0) + (parseInt(r.count, 10) || 0);
+                        });
+                    }
+                });
+
+                return Object.keys(map).map(k => ({
+                    label: k,
+                    value: map[k]
+                })).sort((a, b) => b.value - a.value);
+            };
+
+            const chartData = aggregateData();
+            const maxValue = chartData.length > 0 ? Math.max(...chartData.map(d => d.value)) : 1;
+
+            // 漸層顏色對應
+            const dimensionLabels = {
+                group: '按職群統計',
+                school: '按合作國中統計',
+                branch: '按科別統計',
+                academicYear: '按學年度統計'
+            };
+
+            return (
+                <div class="no-print animate-fadeIn space-y-6">
+                    {/* 數據總覽 KPI 卡片 */}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-gradient-to-br from-green-50 to-emerald-100/60 border border-green-200 p-4 rounded-xl flex items-center gap-4">
+                            <div class="bg-green-600 text-white p-3 rounded-lg shadow-sm">
+                                <i data-lucide="users" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <p class="text-xs font-semibold text-green-800">總參與學生人數</p>
+                                <p class="text-2xl font-bold text-green-900 mt-0.5">{totalStudents.toLocaleString()} <span class="text-xs font-normal">人</span></p>
+                            </div>
+                        </div>
+
+                        <div class="bg-gradient-to-br from-blue-50 to-indigo-100/60 border border-blue-200 p-4 rounded-xl flex items-center gap-4">
+                            <div class="bg-blue-600 text-white p-3 rounded-lg shadow-sm">
+                                <i data-lucide="building-2" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <p class="text-xs font-semibold text-blue-800">合作國中校數</p>
+                                <p class="text-2xl font-bold text-blue-900 mt-0.5">{uniqueSchoolsCount} <span class="text-xs font-normal">所</span></p>
+                            </div>
+                        </div>
+
+                        <div class="bg-gradient-to-br from-purple-50 to-purple-100/60 border border-purple-200 p-4 rounded-xl flex items-center gap-4">
+                            <div class="bg-purple-600 text-white p-3 rounded-lg shadow-sm">
+                                <i data-lucide="file-check" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <p class="text-xs font-semibold text-purple-800">累積試探梯次數</p>
+                                <p class="text-2xl font-bold text-purple-900 mt-0.5">{totalBatches} <span class="text-xs font-normal">場次</span></p>
+                            </div>
+                        </div>
+
+                        <div class="bg-gradient-to-br from-amber-50 to-amber-100/60 border border-amber-200 p-4 rounded-xl flex items-center gap-4">
+                            <div class="bg-amber-600 text-white p-3 rounded-lg shadow-sm">
+                                <i data-lucide="calculator" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <p class="text-xs font-semibold text-amber-800">平均每場試探人數</p>
+                                <p class="text-2xl font-bold text-amber-900 mt-0.5">{avgStudentsPerBatch} <span class="text-xs font-normal">人/場</span></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 控制選項與統計長條圖 */}
+                    <div class="bg-white border border-slate-200 rounded-xl p-6 shadow-xs">
+                        <div class="flex flex-wrap items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+                            <div>
+                                <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="bar-chart-3" class="w-5 h-5 text-green-600"></i>
+                                    職業試探參與人數統計圖表
+                                </h2>
+                                <p class="text-xs text-slate-500 mt-0.5">點選下方分類按鈕可切換統計視角與趨勢分析</p>
+                            </div>
+
+                            {/* 控制工具列 */}
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                                    <i data-lucide="filter" class="w-3.5 h-3.5"></i> 學年度篩選：
+                                </span>
+                                <select 
+                                    value={selectedYear}
+                                    onChange={(e) => setSelectedYear(e.target.value)}
+                                    class="text-xs bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 font-medium outline-none focus:border-green-500"
+                                >
+                                    <option value="all">全部學年度</option>
+                                    {availableYears.map(yr => (
+                                        <option key={yr} value={yr}>{yr} 學年度</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* 維度切換按鈕組 */}
+                        <div class="flex flex-wrap gap-2 mb-6">
+                            {Object.entries(dimensionLabels).map(([key, label]) => (
+                                <button
+                                    key={key}
+                                    onClick={() => setDimension(key)}
+                                    class={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                        dimension === key
+                                            ? 'bg-green-600 text-white shadow-sm'
+                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* 長條圖本體 (Horizontal Bar Chart) */}
+                        {chartData.length === 0 ? (
+                            <div class="text-center py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                                <i data-lucide="pie-chart" class="w-10 h-10 text-slate-300 mx-auto mb-2"></i>
+                                <p class="text-slate-500 text-sm font-medium">尚無足夠的歷史資料可供統計分析</p>
+                            </div>
+                        ) : (
+                            <div class="space-y-4">
+                                {chartData.map((item, idx) => {
+                                    const percentage = totalStudents > 0 ? ((item.value / totalStudents) * 100).toFixed(1) : 0;
+                                    const barWidthPercentage = maxValue > 0 ? (item.value / maxValue) * 100 : 0;
+
+                                    return (
+                                        <div key={idx} class="group">
+                                            <div class="flex justify-between items-center text-xs font-semibold mb-1">
+                                                <span class="text-slate-700 flex items-center gap-2">
+                                                    <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-600 text-[10px] flex items-center justify-center font-bold">
+                                                        {idx + 1}
+                                                    </span>
+                                                    {item.label}
+                                                </span>
+                                                <span class="text-slate-600 font-mono">
+                                                    <strong class="text-green-700 text-sm">{item.value.toLocaleString()}</strong> 人 
+                                                    <span class="text-slate-400 font-normal ml-1">({percentage}%)</span>
+                                                </span>
+                                            </div>
+
+                                            {/* 動態動畫條 */}
+                                            <div class="w-full bg-slate-100 rounded-full h-4 overflow-hidden p-0.5 border border-slate-200">
+                                                <div 
+                                                    class="bg-gradient-to-r from-emerald-500 to-green-600 h-full rounded-full transition-all duration-700 ease-out flex items-center justify-end pr-2"
+                                                    style={{ width: `${Math.max(barWidthPercentage, 3)}%` }}
+                                                >
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* 統計資料表格 */}
+                        {chartData.length > 0 && (
+                            <div class="mt-8 pt-6 border-t border-slate-200">
+                                <h3 class="text-xs font-bold text-slate-600 mb-3 flex items-center gap-1.5">
+                                    <i data-lucide="table" class="w-4 h-4 text-slate-500"></i>
+                                    統計數據明細對照表
+                                </h3>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-xs text-left border-collapse border border-slate-200">
+                                        <thead>
+                                            <tr class="bg-slate-50 text-slate-700">
+                                                <th class="border border-slate-200 p-2 text-center w-12">排名</th>
+                                                <th class="border border-slate-200 p-2">項目名稱</th>
+                                                <th class="border border-slate-200 p-2 text-center">累計人數</th>
+                                                <th class="border border-slate-200 p-2 text-center">佔總數比例</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {chartData.map((item, index) => (
+                                                <tr key={index} class="hover:bg-slate-50">
+                                                    <td class="border border-slate-200 p-2 text-center font-bold text-slate-500">{index + 1}</td>
+                                                    <td class="border border-slate-200 p-2 font-semibold text-slate-800">{item.label}</td>
+                                                    <td class="border border-slate-200 p-2 text-center font-bold text-green-700">{item.value.toLocaleString()} 人</td>
+                                                    <td class="border border-slate-200 p-2 text-center font-mono text-slate-600">
+                                                        {((item.value / totalStudents) * 100).toFixed(1)}%
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function App() {
+            // 頁籤狀態 "editor" | "history"
+            const [activeTab, setActiveTab] = useState("editor");
+            const [isLoading, setIsLoading] = useState(false);
+
+            // 管理員驗證狀態 (帳號: admin / 密碼: tmhs603)
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [showLoginModal, setShowLoginModal] = useState(false);
+            const [loginUser, setLoginUser] = useState("");
+            const [loginPass, setLoginPass] = useState("");
+            const [loginError, setLoginError] = useState("");
+
+            // 處理管理員登入驗證
+            const handleLogin = (e) => {
+                if (e) e.preventDefault();
+                if (loginUser === "admin" && loginPass === "tmhs603") {
+                    setIsAdmin(true);
+                    setShowLoginModal(false);
+                    setLoginUser("");
+                    setLoginPass("");
+                    setLoginError("");
+                } else {
+                    setLoginError("帳號或密碼錯誤！");
+                }
+            };
+
+            // 處理管理員登出
+            const handleLogout = () => {
+                setIsAdmin(false);
+            };
+
+            // 編輯器核心狀態
+            const [academicYear, setAcademicYear] = useState("115");
+            const [schoolName, setSchoolName] = useState("幸福");
+            const [semester, setSemester] = useState("一"); 
+            
+            // 依要求更新預設備註內容
+            const [remarks, setRemarks] = useState(
+                "1. 請授課老師依照日期與時間到達指定地點就位。\n2. 回饋單填寫完畢後請交給舉牌學生。\n3. 授課所需材料由科內統一請購。（餐飲科老師將菜單交由餐飲科助教傳真）\n4. 實習教室若有異動請提前告知實習處。"
+            );
+
+            // 實作準備與核銷資訊狀態
+            const [prepTeachers, setPrepTeachers] = useState("陳國華、林美玲");
+            const [prepCount, setPrepCount] = useState("15");
+            const [verificationMethod, setVerificationMethod] = useState("國中核銷"); 
+            
+            // 授課教師集合時間與返校時間欄位
+            const [assemblyTime, setAssemblyTime] = useState("13：10");
+            const [returnTime, setReturnTime] = useState("16：10");
+
+            // 每位學生材料費
+            const [materialFee, setMaterialFee] = useState("200");
+
+            // 統一上課日期與時間（整張表共用一個合併欄位）
+            const [unifiedDate, setUnifiedDate] = useState("2026-10-14");
+            const [unifiedTimeSlot, setUnifiedTimeSlot] = useState("13:00~15:00");
+
+            // 表格行資料
+            const [rows, setRows] = useState([
+                { id: "1", group: "電機電子職群", branch: "電機科", content: "室內配線基本實務體驗", teacher: "陳國華", room: "電機實習工場", count: 15, note: "第1組" },
+                { id: "2", group: "餐旅職群", branch: "烘焙科", content: "基礎西點烘焙與餅乾製作", teacher: "林美玲", room: "烘焙教室", count: 18, note: "第2組" },
+                { id: "3", group: "設計職群", branch: "多媒體設計科", content: "2D動畫與角色繪製初探", teacher: "張志明", room: "電腦教室(三)", count: 12, note: "第3組" },
+                { id: "4", group: "家政職群", branch: "美容美髮科", content: "時尚編髮與指甲彩繪彩妝", teacher: "黃雅婷", room: "美髮教室", count: 15, note: "" },
+                { id: "5", group: "機械職群", branch: "微型機器人科", content: "樂高機器人組裝與程式操控", teacher: "戴偉倫", room: "創客教室", count: 14, note: "" },
+            ]);
+
+            // 歷史紀錄資料庫
+            const [historyList, setHistoryList] = useState([]);
+            const [selectedHistory, setSelectedHistory] = useState(null); 
+
+            // 初始化：載入本地與雲端歷史資料
+            useEffect(() => {
+                const savedData = localStorage.getItem("vocational_table_data_v8");
+                if (savedData) {
+                    try {
+                        const parsed = JSON.parse(savedData);
+                        setAcademicYear(parsed.academicYear || "115");
+                        setSchoolName(parsed.schoolName || "幸福");
+                        setSemester(parsed.semester || "一");
+                        setRemarks(parsed.remarks || "");
+                        setRows(parsed.rows || []);
+                        setPrepTeachers(parsed.prepTeachers || "陳國華、林美玲");
+                        setPrepCount(parsed.prepCount || "15");
+                        setVerificationMethod(parsed.verificationMethod || "國中核銷");
+                        setAssemblyTime(parsed.assemblyTime || "13：10");
+                        setReturnTime(parsed.returnTime || "16：10");
+                        setMaterialFee(parsed.materialFee || "200");
+                        setUnifiedDate(parsed.unifiedDate || "2026-10-14");
+                        setUnifiedTimeSlot(parsed.unifiedTimeSlot || "13:00~15:00");
+                    } catch (e) {
+                        console.error("載入編輯資料失敗", e);
+                    }
+                }
+
+                // 載入歷史資料列表 (優先從 Google Sheets 載入)
+                fetchHistoryData();
+            }, []);
+
+            // 從 Google Sheets / 本地載入歷史資料
+            const fetchHistoryData = async () => {
+                if (GAS_WEB_APP_URL && !GAS_WEB_APP_URL.includes("xxxxxxxxxx")) {
+                    setIsLoading(true);
+                    try {
+                        const response = await fetch(`${GAS_WEB_APP_URL}?action=getHistory`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            setHistoryList(data);
+                            localStorage.setItem("vocational_table_history_v8", JSON.stringify(data));
+                        }
+                    } catch (e) {
+                        console.warn("無法連接 GAS，將載入本地暫存之歷史紀錄", e);
+                        loadLocalHistory();
+                    } finally {
+                        setIsLoading(false);
+                    }
+                } else {
+                    loadLocalHistory();
+                }
+            };
+
+            const loadLocalHistory = () => {
+                const savedHistory = localStorage.getItem("vocational_table_history_v8");
+                if (savedHistory) {
+                    try {
+                        setHistoryList(JSON.parse(savedHistory));
+                    } catch (e) {
+                        console.error("載入歷史紀錄失敗", e);
+                    }
+                }
+            };
+
+            // 儲存編輯器資料至快取
+            const saveDataToLocal = (newYear, newSchool, newSemester, newRemarks, newRows, newPrepTeachers, newPrepCount, newVerifMethod, newAssemblyTime, newUnifiedDate, newUnifiedTimeSlot, newMaterialFee, newReturnTime) => {
+                const dataToSave = {
+                    academicYear: newYear,
+                    schoolName: newSchool,
+                    semester: newSemester,
+                    remarks: newRemarks,
+                    rows: newRows,
+                    prepTeachers: newPrepTeachers,
+                    prepCount: newPrepCount,
+                    verificationMethod: newVerifMethod,
+                    assemblyTime: newAssemblyTime,
+                    unifiedDate: newUnifiedDate,
+                    unifiedTimeSlot: newUnifiedTimeSlot,
+                    materialFee: newMaterialFee,
+                    returnTime: newReturnTime
+                };
+                localStorage.setItem("vocational_table_data_v8", JSON.stringify(dataToSave));
+            };
+
+            // 處理欄位變更
+            const handleCellChange = (id, field, value) => {
+                if (!isAdmin) return;
+                const updatedRows = rows.map(row => {
+                    if (row.id === id) {
+                        let val = value;
+                        if (field === 'count') {
+                            val = value === "" ? "" : parseInt(value, 10) || 0;
+                        }
+                        return { ...row, [field]: val };
+                    }
+                    return row;
+                });
+                setRows(updatedRows);
+                saveDataToLocal(academicYear, schoolName, semester, remarks, updatedRows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+            };
+
+            // 新增一列
+            const addRow = () => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，請先登入管理員帳號！");
+                    return;
+                }
+                const newRow = {
+                    id: Date.now().toString(),
+                    group: "",
+                    branch: "",
+                    content: "",
+                    teacher: "",
+                    room: "",
+                    count: 0,
+                    note: ""
+                };
+                const updated = [...rows, newRow];
+                setRows(updated);
+                saveDataToLocal(academicYear, schoolName, semester, remarks, updated, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+            };
+
+            // 刪除一列
+            const deleteRow = (id) => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，請先登入管理員帳號！");
+                    return;
+                }
+                if (rows.length <= 1) {
+                    alert("請至少保留一列填寫空間！");
+                    return;
+                }
+                const updated = rows.filter(row => row.id !== id);
+                setRows(updated);
+                saveDataToLocal(academicYear, schoolName, semester, remarks, updated, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+            };
+
+            // 清空當前資料
+            const clearAllData = () => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，請先登入管理員帳號！");
+                    return;
+                }
+                if (confirm("確定要清空當前編輯中的所有欄位內容嗎？")) {
+                    const emptyRows = [{
+                        id: Date.now().toString(), group: "", branch: "", content: "", teacher: "", room: "", count: 0, note: ""
+                    }];
+                    setAcademicYear("");
+                    setSchoolName("");
+                    setRemarks("");
+                    setPrepTeachers("");
+                    setPrepCount("");
+                    setAssemblyTime("13：10");
+                    setReturnTime("16：10");
+                    setMaterialFee("");
+                    setVerificationMethod("國中核銷");
+                    setUnifiedDate("");
+                    setUnifiedTimeSlot("");
+                    setRows(emptyRows);
+                }
+            };
+
+            // 載入預設示範
+            const loadSampleData = () => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，請先登入管理員帳號！");
+                    return;
+                }
+                const samples = [
+                    { id: "1", group: "電機電子職群", branch: "電機科", content: "室內配線基本實務體驗", teacher: "陳國華", room: "電機實習工場", count: 15, note: "第1組" },
+                    { id: "2", group: "餐旅職群", branch: "烘焙科", content: "基礎西點烘焙與餅乾製作", teacher: "林美玲", room: "烘焙教室", count: 18, note: "第2組" },
+                    { id: "3", group: "設計職群", branch: "多媒體設計科", content: "2D動畫與角色繪製初探", teacher: "張志明", room: "電腦教室(三)", count: 12, note: "第3組" },
+                    { id: "4", group: "家政職群", branch: "美容美髮科", content: "時尚編髮與指甲彩繪彩妝", teacher: "黃雅婷", room: "美髮教室", count: 15, note: "" },
+                    { id: "5", group: "機械職群", branch: "微型機器人科", content: "樂高機器人組裝與程式操控", teacher: "戴偉倫", room: "創客教室", count: 14, note: "" },
+                ];
+                setAcademicYear("115");
+                setSchoolName("幸福");
+                setSemester("一");
+                setRemarks("1. 請授課老師依照日期與時間到達指定地點就位。\n2. 回饋單填寫完畢後請交給舉牌學生。\n3. 授課所需材料由科內統一請購。（餐飲科老師將菜單交由餐飲科助教傳真）\n4. 實習教室若有異動請提前告知實習處。");
+                setPrepTeachers("陳國華、林美玲");
+                setPrepCount("15");
+                setAssemblyTime("13：10");
+                setReturnTime("16：10");
+                setMaterialFee("200");
+                setVerificationMethod("國中核銷");
+                setUnifiedDate("2026-10-14");
+                setUnifiedTimeSlot("13:00~15:00");
+                setRows(samples);
+                saveDataToLocal("115", "幸福", "一", "1. 請授課老師依照日期與時間到達指定地點就位。\n2. 回饋單填寫完畢後請交給舉牌學生。\n3. 授課所需材料由科內統一請購。（餐飲科老師將菜單交由餐飲科助教傳真）\n4. 實習教室若有異動請提前告知實習處。", samples, "陳國華、林美玲", "15", "國中核銷", "13：10", "2026-10-14", "13:00~15:00", "200", "16：10");
+            };
+
+            // 計算人數總計
+            const totalCount = rows.reduce((sum, row) => sum + (parseInt(row.count, 10) || 0), 0);
+
+            // 匯出當前編輯器資料為 CSV
+            const exportToCSV = () => {
+                let csvContent = "\uFEFF"; // 避免 Excel 中文亂碼的 BOM
+                csvContent += `學年度,${academicYear},學期,第${semester}學期,學校,${schoolName}國中\n\n`;
+                csvContent += "職群,科別,上課日期與時間,上課內容,授課教師,授課教室,人數,備註\n";
+                
+                rows.forEach((row) => {
+                    const rocObj = formatROCDisplay(unifiedDate, unifiedTimeSlot);
+                    const formattedDateTime = `${rocObj.date} ${rocObj.time}`;
+                    csvContent += `"${row.group}","${row.branch}","${formattedDateTime}","${row.content}","${row.teacher}","${row.room}",${row.count},"${row.note}"\n`;
+                });
+                
+                csvContent += `,,,,,人數總計,${totalCount},\n\n`;
+                csvContent += `教師集合資訊,授課教師請於 ${assemblyTime} 在金容樓川堂前集合分組，帶領所屬班級前往教室；授課教師請於 ${returnTime} 在金容樓川堂前集合返校。\n`;
+                csvContent += `每位學生材料費,每位學生材料費 ${materialFee} 元。\n`;
+                csvContent += `實作成品說明,請 ${prepTeachers} 老師準備實作成品 ${prepCount} 份給當天國中帶隊教師。\n`;
+                csvContent += `核銷方式,${verificationMethod}\n\n`;
+                csvContent += `備註說明,${(remarks || "").replace(/\n/g, ' ')}\n`;
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", `${academicYear}學年度第${semester}學期_${schoolName}國中_職業試探授課教師一覽表.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // 儲存到歷史資料庫 (同步支援 Google Sheets 分頁寫入)
+            const saveToHistory = async () => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，請先點擊右上角登入管理員帳號再進行存檔！");
+                    setShowLoginModal(true);
+                    return;
+                }
+                if (!academicYear || !schoolName) {
+                    alert("請務必填寫『學年度』與『學校名稱』再進行存檔！");
+                    return;
+                }
+
+                const now = new Date();
+                const formattedTime = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+                
+                const newRecord = {
+                    id: Date.now().toString(),
+                    saveTime: formattedTime,
+                    academicYear,
+                    schoolName,
+                    semester,
+                    remarks,
+                    prepTeachers,
+                    prepCount,
+                    verificationMethod,
+                    assemblyTime,
+                    returnTime,
+                    materialFee,
+                    unifiedDate,
+                    unifiedTimeSlot,
+                    rows: JSON.parse(JSON.stringify(rows)), 
+                    totalStudents: totalCount
+                };
+
+                setIsLoading(true);
+
+                // 1. 如果已設定 GAS，則推送到 Google Sheets (依照學校建立不同分頁)
+                if (GAS_WEB_APP_URL && !GAS_WEB_APP_URL.includes("xxxxxxxxxx")) {
+                    try {
+                        const response = await fetch(GAS_WEB_APP_URL, {
+                            method: "POST",
+                            mode: "no-cors", 
+                            headers: {
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                                action: "saveHistory",
+                                record: newRecord
+                            })
+                        });
+                        
+                        alert(`☁️ 已將資料成功串接並傳送至 Google Sheets！\n學校名稱「${schoolName}國中」之專屬分頁已成功更新。`);
+                    } catch (e) {
+                        console.error("傳送至 Google Sheets 失敗，將降級儲存至本機快取", e);
+                    }
+                }
+
+                // 2. 本地快取依然備份一份以供前端「歷史資料查詢」頁籤讀取
+                const updatedHistory = [newRecord, ...historyList];
+                setHistoryList(updatedHistory);
+                localStorage.setItem("vocational_table_history_v8", JSON.stringify(updatedHistory));
+                setIsLoading(false);
+
+                if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes("xxxxxxxxxx")) {
+                    alert(`💾 已成功將「${academicYear}學年度第${semester}學期-${schoolName}國中」記錄存檔至「歷史資料查詢」中！\n(提示：您尚未填寫有效的 GAS 網址，目前資料暫存於這台電腦中。)`);
+                }
+            };
+
+            // 刪除歷史紀錄
+            const deleteHistoryItem = async (id, school, event) => {
+                event.stopPropagation();
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，刪除歷史紀錄需要管理員權限！");
+                    setShowLoginModal(true);
+                    return;
+                }
+                if (confirm(`確定要永久刪除此筆歷史備份紀錄嗎？\n(若有串接 Google Sheets，系統將一併發送請求移除該學校分頁中此項目)`)) {
+                    setIsLoading(true);
+                    
+                    // 1. 若有 GAS，同步刪除 Google Sheets 該分頁之資料
+                    if (GAS_WEB_APP_URL && !GAS_WEB_APP_URL.includes("xxxxxxxxxx")) {
+                        try {
+                            await fetch(`${GAS_WEB_APP_URL}?action=deleteHistory&id=${id}&schoolName=${encodeURIComponent(school)}`);
+                        } catch (e) {
+                            console.error("刪除 Google Sheets 資料失敗", e);
+                        }
+                    }
+
+                    // 2. 更新前端狀態
+                    const updated = historyList.filter(item => item.id !== id);
+                    setHistoryList(updated);
+                    localStorage.setItem("vocational_table_history_v8", JSON.stringify(updated));
+                    setIsLoading(false);
+
+                    if (selectedHistory && selectedHistory.id === id) {
+                        setSelectedHistory(null);
+                    }
+                }
+            };
+
+            // 還原歷史檔案到編輯器中
+            const restoreHistoryItem = (item) => {
+                if (!isAdmin) {
+                    alert("目前為唯讀模式，還原歷史紀錄至編輯區需要管理員權限！");
+                    setShowLoginModal(true);
+                    return;
+                }
+                if (confirm(`即將把「${item.academicYear}學年度-${item.schoolName}國中」資料覆蓋回當前編輯器，當前編輯中的未存檔資料將會遺失。是否確定還原？`)) {
+                    setAcademicYear(item.academicYear);
+                    setSchoolName(item.schoolName);
+                    setSemester(item.semester);
+                    setRemarks(item.remarks || "");
+                    setPrepTeachers(item.prepTeachers || "");
+                    setPrepCount(item.prepCount || "");
+                    setAssemblyTime(item.assemblyTime || "13：10");
+                    setReturnTime(item.returnTime || "16：10");
+                    setMaterialFee(item.materialFee || "200");
+                    setVerificationMethod(item.verificationMethod || "國中核銷");
+                    setUnifiedDate(item.unifiedDate || "2026-10-14");
+                    setUnifiedTimeSlot(item.unifiedTimeSlot || "13:00~15:00");
+                    setRows(item.rows);
+                    saveDataToLocal(item.academicYear, item.schoolName, item.semester, item.remarks || "", item.rows, item.prepTeachers || "", item.prepCount || "", item.verificationMethod || "國中核銷", item.assemblyTime || "13：10", item.unifiedDate || "2026-10-14", item.unifiedTimeSlot || "13:00~15:00", item.materialFee || "200", item.returnTime || "16：10");
+                    setActiveTab("editor");
+                }
+            };
+
+            // 匯出特定歷史紀錄 CSV
+            const exportHistoryToCSV = (item, event) => {
+                if (event) event.stopPropagation();
+                let csvContent = "\uFEFF"; 
+                csvContent += `學年度,${item.academicYear},學期,第${item.semester}學期,學校,${item.schoolName}國中\n\n`;
+                csvContent += "職群,科別,上課日期與時間,上課內容,授課教師,授課教室,人數,備註\n";
+                
+                item.rows.forEach((row) => {
+                    const rocObj = formatROCDisplay(item.unifiedDate, item.unifiedTimeSlot);
+                    const formattedDateTime = `${rocObj.date} ${rocObj.time}`;
+                    csvContent += `"${row.group}","${row.branch}","${formattedDateTime}","${row.content}","${row.teacher}","${row.room}",${row.count},"${row.note}"\n`;
+                });
+                
+                csvContent += `,,,,,人數總計,${item.totalStudents || 0},\n\n`;
+                csvContent += `教師集合資訊,授課教師請於 ${item.assemblyTime || "13：10"} 在金容樓川堂前集合分組，帶領所屬班級前往教室；授課教師請於 ${item.returnTime || "16：10"} 在金容樓川堂前集合返校。\n`;
+                csvContent += `每位學生材料費,每位學生材料費 ${item.materialFee || "200"} 元。\n`;
+                csvContent += `實作成品說明,請 ${item.prepTeachers} 老師準備實作成品 ${item.prepCount} 份給當天國中帶隊教師。\n`;
+                csvContent += `核銷方式,${item.verificationMethod}\n\n`;
+                csvContent += `備註說明,${(item.remarks || "").replace(/\n/g, ' ')}\n`;
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", `歷史紀錄_${item.academicYear}學年度第${item.semester}學期_${item.schoolName}國中.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // 列印特定歷史紀錄
+            const printHistoryItem = (item, event) => {
+                if (event) event.stopPropagation();
+                setSelectedHistory(item);
+                setTimeout(() => {
+                    window.print();
+                }, 300);
+            };
+
+            // 一鍵列印
+            const handlePrint = () => {
+                window.print();
+            };
+
+            // 初始化與刷新 Lucide 圖示
+            useEffect(() => {
+                if (typeof lucide !== 'undefined') {
+                    lucide.createIcons();
+                }
+            }, [rows, activeTab, historyList, selectedHistory]);
+
+            return (
+                <div class="max-w-6xl mx-auto bg-white p-6 md:p-10 rounded-xl shadow-xl border border-gray-200 print:shadow-none print:border-none print:p-0">
+                    
+                    {/* 管理員登入視窗 Modal */}
+                    {showLoginModal && (
+                        <div class="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn no-print">
+                            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm border border-slate-200">
+                                <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                                    <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+                                        <i data-lucide="shield-lock" class="w-5 h-5 text-green-600"></i>
+                                        管理員權限驗證
+                                    </h3>
+                                    <button onClick={() => setShowLoginModal(false)} class="text-slate-400 hover:text-slate-600">
+                                        <i data-lucide="x" class="w-5 h-5"></i>
+                                    </button>
+                                </div>
+                                <form onSubmit={handleLogin} class="space-y-4">
+                                    {loginError && (
+                                        <div class="bg-rose-50 text-rose-600 border border-rose-200 text-xs p-2.5 rounded font-medium flex items-center gap-1.5">
+                                            <i data-lucide="alert-circle" class="w-4 h-4 shrink-0"></i>
+                                            {loginError}
+                                        </div>
+                                    )}
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 mb-1">管理員帳號</label>
+                                        <input
+                                            type="text"
+                                            value={loginUser}
+                                            onChange={(e) => setLoginUser(e.target.value)}
+                                            placeholder="請輸入帳號"
+                                            class="w-full text-xs p-2.5 border border-slate-300 rounded-lg outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600"
+                                            autoFocus
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 mb-1">管理員密碼</label>
+                                        <input
+                                            type="password"
+                                            value={loginPass}
+                                            onChange={(e) => setLoginPass(e.target.value)}
+                                            placeholder="請輸入密碼"
+                                            class="w-full text-xs p-2.5 border border-slate-300 rounded-lg outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600"
+                                        />
+                                    </div>
+                                    <div class="pt-2 flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLoginModal(false)}
+                                            class="w-1/2 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                                        >
+                                            取消
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            class="w-1/2 py-2 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-lg shadow-sm transition"
+                                        >
+                                            登入驗證
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* GAS 未綁定提示 */}
+                    {(!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes("xxxxxxxxxx")) && (
+                        <div class="no-print bg-amber-50 border-l-4 border-amber-500 text-amber-800 p-3 rounded mb-4 text-xs font-semibold flex items-center gap-2">
+                            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-600 shrink-0"></i>
+                            <span>目前尚未填寫有效的 Google Sheets GAS 網址，系統目前以本地 LocalStorage 運作（換電腦會查不到）。請參考說明部署並填入 GAS 網址以解鎖雲端多學校分頁儲存功能！</span>
+                        </div>
+                    )}
+
+                    {/* 頁籤導覽列 - 列印時自動隱藏 */}
+                    <div class="no-print flex border-b border-gray-200 mb-6 justify-between items-center flex-wrap gap-2">
+                        <div class="flex flex-wrap gap-1">
+                            <button
+                                onClick={() => { setActiveTab("editor"); setSelectedHistory(null); }}
+                                class={`flex items-center gap-2 py-3 px-5 font-bold text-sm border-b-2 transition-all ${
+                                    activeTab === 'editor' && !selectedHistory
+                                        ? 'border-green-600 text-green-700 bg-green-50/50 rounded-t-lg'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                }`}
+                            >
+                                <i data-lucide="edit-3" class="w-4 h-4"></i>
+                                本期資料填報 (編輯器)
+                            </button>
+                            <button
+                                onClick={() => { setActiveTab("history"); setSelectedHistory(null); fetchHistoryData(); }}
+                                class={`flex items-center gap-2 py-3 px-5 font-bold text-sm border-b-2 transition-all relative ${
+                                    activeTab === 'history' && !selectedHistory
+                                        ? 'border-green-600 text-green-700 bg-green-50/50 rounded-t-lg'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                }`}
+                            >
+                                <i data-lucide="database" class="w-4 h-4"></i>
+                                歷史資料查詢 ({historyList.length})
+                            </button>
+                            <button
+                                onClick={() => { setActiveTab("analytics"); setSelectedHistory(null); fetchHistoryData(); }}
+                                class={`flex items-center gap-2 py-3 px-5 font-bold text-sm border-b-2 transition-all relative ${
+                                    activeTab === 'analytics' && !selectedHistory
+                                        ? 'border-green-600 text-green-700 bg-green-50/50 rounded-t-lg'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                }`}
+                            >
+                                <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+                                統計數據圖表
+                            </button>
+                        </div>
+
+                        {/* 管理員登入/權限狀態切換區 */}
+                        <div class="flex items-center gap-2 my-1">
+                            {isLoading && (
+                                <span class="text-xs bg-green-100 text-green-800 font-semibold px-2 py-1 rounded animate-pulse flex items-center gap-1 mr-2">
+                                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 animate-spin"></i>
+                                    Sheets 同步中...
+                                </span>
+                            )}
+
+                            {isAdmin ? (
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-bold text-green-700 bg-green-100 border border-green-300 px-3 py-1.5 rounded-lg flex items-center gap-1">
+                                        <i data-lucide="shield-check" class="w-4 h-4 text-green-600"></i> 已解鎖編輯權限 (admin)
+                                    </span>
+                                    <button
+                                        onClick={handleLogout}
+                                        class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-lg border border-slate-300 transition"
+                                    >
+                                        登出
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={() => { setShowLoginModal(true); setLoginError(""); }}
+                                    class="text-xs bg-amber-500 hover:bg-amber-600 text-white font-bold px-3.5 py-1.5 rounded-lg shadow-xs flex items-center gap-1.5 transition"
+                                >
+                                    <i data-lucide="lock" class="w-3.5 h-3.5"></i> 管理員登入編輯
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* ==================== 頁籤二：歷史資料查詢 (列表) ==================== */}
+                    {activeTab === "history" && !selectedHistory && (
+                        <div class="no-print animate-fadeIn">
+                            <div class="bg-slate-50 border border-slate-200 rounded-lg p-5 mb-6">
+                                <h3 class="font-bold text-slate-800 text-base mb-2 flex items-center gap-2">
+                                    <i data-lucide="info" class="w-5 h-5 text-green-600"></i>
+                                    關於歷史資料檢視權限與 Google Sheets 儲存說明：
+                                </h3>
+                                <p class="text-sm text-slate-600 leading-relaxed">
+                                    所有使用者皆可在此自由查詢與下載歷史紀錄。若需進行資料更新、還原編輯或刪除紀錄，請先點擊右上角<strong>「管理員登入編輯」</strong>（帳號：<code class="bg-slate-200 px-1 py-0.5 rounded text-xs font-mono">admin</code> / 密碼：<code class="bg-slate-200 px-1 py-0.5 rounded text-xs font-mono">tmhs603</code>）。
+                                </p>
+                            </div>
+
+                            {historyList.length === 0 ? (
+                                <div class="text-center py-16 border-2 border-dashed border-gray-200 rounded-xl">
+                                    <i data-lucide="folder-open" class="w-12 h-12 text-gray-300 mx-auto mb-3"></i>
+                                    <p class="text-gray-500 font-medium text-sm">目前尚無歷史存檔紀錄</p>
+                                    <p class="text-gray-400 text-xs mt-1">請回到「本期資料填報」編輯後點選儲存歷史</p>
+                                </div>
+                            ) : (
+                                <div class="grid gap-4">
+                                    {historyList.map((item) => (
+                                        <div 
+                                            key={item.id}
+                                            class="bg-white border border-gray-200 rounded-lg p-4 hover:border-green-500 hover:shadow-md transition-all flex flex-wrap items-center justify-between gap-4 cursor-pointer"
+                                            onClick={() => setSelectedHistory(item)}
+                                        >
+                                            <div class="flex items-start gap-3">
+                                                <div class="bg-green-100 text-green-700 p-2.5 rounded-lg">
+                                                    <i data-lucide="file-text" class="w-5 h-5"></i>
+                                                </div>
+                                                <div>
+                                                    <h4 class="font-bold text-slate-800 text-base">
+                                                        {item.academicYear} 學年度第 {item.semester} 學期 ‧ {item.schoolName}國中職業試探授課教師一覽表
+                                                    </h4>
+                                                    <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 mt-1">
+                                                        <span class="flex items-center gap-1">
+                                                            <i data-lucide="layers" class="w-3.5 h-3.5"></i> 課程：{item.rows?.length || 0} 組
+                                                        </span>
+                                                        <span class="flex items-center gap-1">
+                                                            <i data-lucide="users" class="w-3.5 h-3.5"></i> 總人數：{item.totalStudents || 0} 人
+                                                        </span>
+                                                        <span class="flex items-center gap-1">
+                                                            <i data-lucide="clock" class="w-3.5 h-3.5"></i> 儲存時間：{item.saveTime}
+                                                        </span>
+                                                        <span class="flex items-center gap-1 text-green-700 bg-green-50 px-1.5 py-0.5 rounded font-bold">
+                                                            <i data-lucide="sheet" class="w-3 h-3 text-green-600"></i> 分頁：{item.schoolName}國中
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* 操作功能組 */}
+                                            <div class="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                    onClick={() => setSelectedHistory(item)}
+                                                    class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1 transition"
+                                                >
+                                                    <i data-lucide="eye" class="w-3.5 h-3.5"></i> 檢視詳情
+                                                </button>
+                                                {isAdmin && (
+                                                    <button
+                                                        onClick={() => restoreHistoryItem(item)}
+                                                        class="bg-green-50 hover:bg-green-100 text-green-700 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1 transition"
+                                                    >
+                                                        <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> 還原編輯
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={(e) => exportHistoryToCSV(item, e)}
+                                                    class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1 transition"
+                                                >
+                                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Excel
+                                                </button>
+                                                <button
+                                                    onClick={(e) => printHistoryItem(item, e)}
+                                                    class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1 transition"
+                                                >
+                                                    <i data-lucide="printer" class="w-3.5 h-3.5"></i> 列印
+                                                </button>
+                                                {isAdmin && (
+                                                    <button
+                                                        onClick={(e) => deleteHistoryItem(item.id, item.schoolName, e)}
+                                                        class="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded transition"
+                                                        title="刪除紀錄"
+                                                    >
+                                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ==================== 頁籤三：統計數據圖表 ==================== */}
+                    {activeTab === "analytics" && !selectedHistory && (
+                        <AnalyticsView historyList={historyList} />
+                    )}
+
+                    {/* ==================== 頁籤一：資料編輯與填報控制台 (列印時會隱藏) ==================== */}
+                    {activeTab === "editor" && (
+                        <div class="no-print bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex flex-col gap-4 shadow-inner">
+                            {/* 未登入權限提示條 */}
+                            {!isAdmin && (
+                                <div class="bg-amber-50 border border-amber-200 text-amber-900 px-3.5 py-2 rounded-md text-xs font-medium flex items-center justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="eye" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                                        <span>目前為<strong>唯讀（檢視）模式</strong>。如需修改表格或存檔，請點擊右上方「管理員登入編輯」。</span>
+                                    </div>
+                                    <button
+                                        onClick={() => { setShowLoginModal(true); setLoginError(""); }}
+                                        class="text-xs font-bold text-amber-800 underline hover:text-amber-950 shrink-0 ml-2"
+                                    >
+                                        立即登入
+                                    </button>
+                                </div>
+                            )}
+
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div class="flex items-center gap-2">
+                                    <div class="bg-green-600 text-white p-2 rounded-lg">
+                                        <i data-lucide="calendar-check" class="w-5 h-5"></i>
+                                    </div>
+                                    <div>
+                                        <h1 class="font-bold text-slate-800 text-lg">一覽表填報系統 (Google Sheets 串接版)</h1>
+                                        <p class="text-xs text-slate-500">自動分分頁儲存 ‧ A4直式列印不跑版 ‧ 跨電腦永久追蹤</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="flex flex-wrap gap-1.5">
+                                    {isAdmin && (
+                                        <button 
+                                            onClick={addRow}
+                                            class="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white px-2.5 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                                        >
+                                            <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i> 新增一列
+                                        </button>
+                                    )}
+
+                                    {isAdmin && (
+                                        <button 
+                                            onClick={saveToHistory}
+                                            class="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                                            title="將當前內容存檔至 Google Sheets 與歷史紀錄中"
+                                        >
+                                            <i data-lucide="cloud-upload" class="w-3.5 h-3.5"></i> 儲存至歷史紀錄 (Sheets)
+                                        </button>
+                                    )}
+
+                                    <button 
+                                        onClick={exportToCSV}
+                                        class="flex items-center gap-1 bg-emerald-700 hover:bg-emerald-800 text-white px-2.5 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                                    >
+                                        <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i> 匯出 Excel
+                                    </button>
+
+                                    <button 
+                                        onClick={handlePrint}
+                                        class="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1.5 rounded text-xs font-medium transition shadow-sm"
+                                    >
+                                        <i data-lucide="printer" class="w-3.5 h-3.5"></i> A4 直式列印
+                                    </button>
+
+                                    {isAdmin && (
+                                        <button 
+                                            onClick={loadSampleData}
+                                            class="flex items-center gap-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-2.5 py-1.5 rounded text-xs font-medium transition"
+                                            title="載入預設試探課程範例"
+                                        >
+                                            <i data-lucide="database" class="w-3.5 h-3.5"></i> 載入範例
+                                        </button>
+                                    )}
+
+                                    {isAdmin && (
+                                        <button 
+                                            onClick={clearAllData}
+                                            class="flex items-center gap-1 bg-rose-50 hover:bg-rose-100 text-rose-600 px-2.5 py-1.5 rounded text-xs font-medium transition border border-rose-200"
+                                        >
+                                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> 清空
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ==================== 歷史單筆詳細預覽頂部返回列 ==================== */}
+                    {selectedHistory && (
+                        <div class="no-print bg-slate-100 border border-slate-300 rounded-lg p-3 mb-6 flex items-center justify-between animate-fadeIn">
+                            <button
+                                onClick={() => setSelectedHistory(null)}
+                                class="bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 border border-slate-300 transition"
+                            >
+                                <i data-lucide="arrow-left" class="w-4 h-4"></i> 返回歷史紀錄列表
+                            </button>
+                            <span class="text-xs text-slate-600 font-medium">
+                                正在瀏覽歷史存檔：<strong class="text-green-700">{selectedHistory.saveTime} 儲存快照</strong>
+                            </span>
+                            <div class="flex gap-2">
+                                {isAdmin && (
+                                    <button
+                                        onClick={() => restoreHistoryItem(selectedHistory)}
+                                        class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 transition shadow-sm"
+                                    >
+                                        <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> 還原到編輯區
+                                    </button>
+                                )}
+                                <button
+                                    onClick={() => exportHistoryToCSV(selectedHistory)}
+                                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 transition shadow-sm"
+                                >
+                                    <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i> 匯出 Excel (CSV)
+                                </button>
+                                <button
+                                    onClick={() => window.print()}
+                                    class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 transition shadow-sm"
+                                >
+                                    <i data-lucide="printer" class="w-3.5 h-3.5"></i> 列印 A4 直式
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+
+                    {/* ==================== 表格本體 ==================== */}
+                    <div class={(activeTab === 'editor' || selectedHistory) ? 'block animate-fadeIn' : 'hidden'}>
+                        
+                        {/* 1. 學校與學年度標題欄位 */}
+                        <div class="text-center mb-6">
+                            <div class="flex flex-wrap items-center justify-center gap-1 text-xl md:text-2xl font-bold text-gray-800 tracking-wider print:text-black">
+                                
+                                {selectedHistory ? (
+                                    /* 歷史預覽模式：純文字 */
+                                    <span class="print-underline font-bold border-b-2 border-slate-700 print:border-black px-1">
+                                        {selectedHistory.academicYear}
+                                    </span>
+                                ) : (
+                                    /* 編輯器模式：輸入框 */
+                                    <span class="relative inline-block w-16 mx-1 border-b-2 border-slate-700 print:border-black">
+                                        <input 
+                                            type="text" 
+                                            value={academicYear} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setAcademicYear(e.target.value);
+                                                saveDataToLocal(e.target.value, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="＿＿" 
+                                            class={`print-title-input w-full text-center bg-transparent outline-none text-xl md:text-2xl font-bold py-0 ${isAdmin ? 'focus:bg-yellow-50' : 'cursor-not-allowed'}`}
+                                        />
+                                    </span>
+                                )}
+                                <span>學年度第</span>
+                                
+                                {selectedHistory ? (
+                                    <span class="print-underline font-bold border-b-2 border-slate-700 print:border-black px-1">
+                                        {selectedHistory.semester}
+                                    </span>
+                                ) : (
+                                    <span class="relative inline-block w-10 mx-1 border-b-2 border-slate-700 print:border-black">
+                                        <input 
+                                            type="text" 
+                                            value={semester} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setSemester(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, e.target.value, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="一" 
+                                            class={`print-title-input w-full text-center bg-transparent outline-none text-xl md:text-2xl font-bold py-0 ${isAdmin ? 'focus:bg-yellow-50' : 'cursor-not-allowed'}`}
+                                        />
+                                    </span>
+                                )}
+                                <span>學期</span>
+
+                                {selectedHistory ? (
+                                    <span class="print-underline font-bold border-b-2 border-slate-700 print:border-black px-2">
+                                        {selectedHistory.schoolName}
+                                    </span>
+                                ) : (
+                                    <span class="relative inline-block w-36 mx-1 border-b-2 border-slate-700 print:border-black">
+                                        <input 
+                                            type="text" 
+                                            value={schoolName} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setSchoolName(e.target.value);
+                                                saveDataToLocal(academicYear, e.target.value, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="＿＿＿＿" 
+                                            class={`print-title-input w-full text-center bg-transparent outline-none text-xl md:text-2xl font-bold py-0 ${isAdmin ? 'focus:bg-yellow-50' : 'cursor-not-allowed'}`}
+                                        />
+                                    </span>
+                                )}
+                                <span>國中職業試探授課教師一覽表</span>
+                            </div>
+                        </div>
+
+                        {/* 主要一覽表格 */}
+                        <table class="w-full border-2 border-slate-800 border-collapse print:border-black text-sm">
+                            <thead>
+                                <tr class="bg-slate-50 print:bg-transparent">
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[13%] text-center">職 群</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[13%] text-center">科 別</th>
+                                    {/* 欄位標題與日期時間字型大小 14px */}
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[22%] text-center" style={{ fontSize: '14px' }}>上課日期與時間</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[18%] text-center">上課內容</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[10%] text-center">授課教師</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[11%] text-center">授課教室</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[6%] text-center">人數</th>
+                                    <th class="border border-slate-400 print:border-black px-1.5 py-2 font-bold text-gray-700 print:text-black w-[7%] text-center">備 註</th>
+                                    <th class="no-print border border-slate-400 px-1.5 py-2 font-bold text-gray-700 w-[5%] text-center">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(selectedHistory ? selectedHistory.rows : rows).map((row, index) => {
+                                    // 格式化統一合併的日期與時間
+                                    const rocDisplay = formatROCDisplay(
+                                        selectedHistory ? selectedHistory.unifiedDate : unifiedDate, 
+                                        selectedHistory ? selectedHistory.unifiedTimeSlot : unifiedTimeSlot
+                                    );
+                                    return (
+                                        <tr key={row.id} class="hover:bg-slate-50/50 print:hover:bg-transparent">
+                                            {/* 職群 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-800 font-medium px-1">{row.group}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.group} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "group", e.target.value)}
+                                                        placeholder="職群名稱"
+                                                        class={`table-input font-medium text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+                                            
+                                            {/* 科別 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-800 px-1">{row.branch}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.branch} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "branch", e.target.value)}
+                                                        placeholder="科別"
+                                                        class={`table-input text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 垂直合併：上課日期與自訂時間欄位 (字型大小設定為 14px) */}
+                                            {index === 0 && (
+                                                <td 
+                                                    rowSpan={selectedHistory ? selectedHistory.rows.length : rows.length} 
+                                                    class="border border-slate-300 print:border-black p-2 h-14 text-center align-middle bg-amber-50/10 print:bg-transparent"
+                                                    style={{ fontSize: '14px' }}
+                                                >
+                                                    {selectedHistory ? (
+                                                        /* 歷史紀錄顯示 - print:hidden 防止列印重複 */
+                                                        <div class="text-center leading-tight font-medium text-black print:hidden" style={{ fontSize: '14px' }}>
+                                                            <span class="font-semibold tracking-wide" style={{ fontSize: '14px' }}>{rocDisplay.date}</span>
+                                                            <span class="font-bold text-gray-800 ml-1 block sm:inline" style={{ fontSize: '14px' }}>
+                                                                ({getWeekdayName(selectedHistory.unifiedDate)} {selectedHistory.unifiedTimeSlot})
+                                                            </span>
+                                                        </div>
+                                                    ) : (
+                                                        /* 編輯器顯示（整張表共用一個合併輸入框：日期 + 文字時間框） */
+                                                        <div class="no-print flex flex-col gap-1 bg-slate-50 p-1.5 rounded border border-slate-200 max-w-[210px] mx-auto" style={{ fontSize: '14px' }}>
+                                                            <input 
+                                                                type="date" 
+                                                                value={unifiedDate} 
+                                                                disabled={!isAdmin}
+                                                                onChange={(e) => {
+                                                                    setUnifiedDate(e.target.value);
+                                                                    saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, e.target.value, unifiedTimeSlot, materialFee, returnTime);
+                                                                }}
+                                                                class={`border border-slate-300 rounded px-1.5 py-0.5 text-center bg-white outline-none w-full font-mono ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                                style={{ fontSize: '14px' }}
+                                                            />
+                                                            
+                                                            {unifiedDate ? (
+                                                                <div class="flex flex-col gap-1 w-full mt-1" style={{ fontSize: '14px' }}>
+                                                                    <div class="text-center">
+                                                                        <span class="bg-green-100 text-green-800 font-bold px-2 py-0.5 rounded" style={{ fontSize: '14px' }}>
+                                                                            {getWeekdayName(unifiedDate, false)}
+                                                                        </span>
+                                                                    </div>
+                                                                    <input 
+                                                                        type="text" 
+                                                                        value={unifiedTimeSlot} 
+                                                                        readOnly={!isAdmin}
+                                                                        onChange={(e) => {
+                                                                            setUnifiedTimeSlot(e.target.value);
+                                                                            saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, e.target.value, materialFee, returnTime);
+                                                                        }}
+                                                                        placeholder="例: 13:00~15:00"
+                                                                        class={`border border-slate-300 rounded px-1 py-0.5 text-center bg-white outline-none w-full font-mono font-semibold ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                                        style={{ fontSize: '14px' }}
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <span class="text-rose-500 font-semibold whitespace-nowrap text-center block w-full" style={{ fontSize: '14px' }}>請選取日期</span>
+                                                            )}
+                                                        </div>
+                                                    )}
+
+                                                    {/* 列印專用純文字 */}
+                                                    <div class="hidden print:block text-center leading-tight font-medium text-black" style={{ fontSize: '14px' }}>
+                                                        <span class="font-semibold block" style={{ fontSize: '14px' }}>{rocDisplay.date}</span>
+                                                        <span class="font-bold block mt-0.5" style={{ fontSize: '14px' }}>{rocDisplay.time}</span>
+                                                    </div>
+                                                </td>
+                                            )}
+
+                                            {/* 上課內容 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14 text-center">
+                                                {selectedHistory ? (
+                                                    <div class="px-2 text-gray-800 text-xs text-center">{row.content}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.content} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "content", e.target.value)}
+                                                        placeholder="授課單元內容"
+                                                        class={`table-input text-center px-2 text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 授課教師 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-800 font-medium px-1">{row.teacher}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.teacher} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "teacher", e.target.value)}
+                                                        placeholder="姓名"
+                                                        class={`table-input font-medium text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 授課教室 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-800 px-1">{row.room}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.room} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "room", e.target.value)}
+                                                        placeholder="實習教室"
+                                                        class={`table-input text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 人數 置中對齊 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14 text-center">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-800 font-bold">{row.count || 0}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="number" 
+                                                        value={row.count === 0 ? "" : row.count} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "count", e.target.value)}
+                                                        placeholder="0"
+                                                        min="0"
+                                                        class={`table-input font-bold text-gray-800 text-center ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 備註 */}
+                                            <td class="border border-slate-300 print:border-black p-0 h-14">
+                                                {selectedHistory ? (
+                                                    <div class="text-center text-gray-600 text-xs px-1">{row.note}</div>
+                                                ) : (
+                                                    <input 
+                                                        type="text" 
+                                                        value={row.note} 
+                                                        readOnly={!isAdmin}
+                                                        onChange={(e) => handleCellChange(row.id, "note", e.target.value)}
+                                                        placeholder=""
+                                                        class={`table-input text-gray-800 ${!isAdmin ? 'cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
+                                            </td>
+
+                                            {/* 操作 */}
+                                            <td class="no-print border border-slate-300 p-0 text-center">
+                                                {selectedHistory ? null : (
+                                                    isAdmin ? (
+                                                        <button 
+                                                            onClick={() => deleteRow(row.id)}
+                                                            class="text-rose-500 hover:text-rose-700 p-1 rounded transition inline-flex items-center justify-center"
+                                                            title="刪除此列"
+                                                        >
+                                                            <i data-lucide="trash" class="w-4 h-4"></i>
+                                                        </button>
+                                                    ) : (
+                                                        <span class="text-slate-300 text-xs text-center block">-</span>
+                                                    )
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+
+                                {/* 底部人數總計行 */}
+                                <tr class="print:bg-transparent">
+                                    <td colSpan="5" class="border-0 print:border-0 p-0"></td>
+                                    
+                                    <td class="border border-slate-400 print:border-black bg-slate-100 print:bg-transparent px-2 py-2 font-bold text-center text-gray-700 print:text-black">
+                                        人 數
+                                    </td>
+                                    
+                                    <td class="border border-slate-400 print:border-black px-2 py-2 font-bold text-center text-green-700 print:text-black text-base">
+                                        {selectedHistory ? selectedHistory.totalStudents : totalCount}
+                                    </td>
+                                    
+                                    <td class="border-0 print:border-0 p-0"></td>
+                                    <td class="no-print border-0 p-0"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+
+                        {/* 實作成品準備、核銷方式及教師集合資訊欄位 (與表格等寬) */}
+                        <div class="mt-4 border-2 border-slate-800 print:border-black bg-white rounded-lg p-4 space-y-4 shadow-sm print:shadow-none print:p-2">
+                            
+                            {/* 集合提醒 (修改雙集合時間：集合出發 & 集合返校) */}
+                            <div class="text-sm text-slate-700 print:text-black leading-relaxed">
+                                {selectedHistory ? (
+                                    /* 歷史檢視模式 */
+                                    <div class="text-xs md:text-sm">
+                                        授課教師請於 <span class="font-bold border-b border-black px-3">{selectedHistory.assemblyTime || "＿＿：＿＿"}</span> 分於金容樓川堂前集合分組，帶領所屬班級前往教室；授課教師請於 <span class="font-bold border-b border-black px-3">{selectedHistory.returnTime || "＿＿：＿＿"}</span> 分於金容樓川堂前集合返校。
+                                    </div>
+                                ) : (
+                                    /* 編輯器模式 */
+                                    <div class="flex flex-wrap items-center gap-1.5 text-xs md:text-sm">
+                                        <span class="font-bold text-slate-800 no-print">集合提醒：</span>
+                                        <span>授課教師請於</span>
+                                        <input 
+                                            type="text" 
+                                            value={assemblyTime} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setAssemblyTime(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, e.target.value, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="13：10" 
+                                            class={`border-b border-dashed border-slate-400 outline-none px-2 py-0.5 text-center bg-slate-50 font-semibold w-24 text-xs md:text-sm print:border-b print:border-black print:bg-transparent ${isAdmin ? 'focus:border-green-600' : 'cursor-not-allowed'}`}
+                                        />
+                                        <span>分於金容樓川堂前集合分組，帶領所屬班級前往教室；授課教師請於</span>
+                                        <input 
+                                            type="text" 
+                                            value={returnTime} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setReturnTime(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, e.target.value);
+                                            }}
+                                            placeholder="16：10" 
+                                            class={`border-b border-dashed border-slate-400 outline-none px-2 py-0.5 text-center bg-slate-50 font-semibold w-24 text-xs md:text-sm print:border-b print:border-black print:bg-transparent ${isAdmin ? 'focus:border-green-600' : 'cursor-not-allowed'}`}
+                                        />
+                                        <span>分於金容樓川堂前集合返校。</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 成品備製上方單獨新增一列可填寫資訊欄 "每位學生材料費xxx元" */}
+                            <div class="text-sm text-slate-700 print:text-black leading-relaxed border-t border-dashed border-slate-200 pt-3 print:border-none print:pt-1">
+                                {selectedHistory ? (
+                                    /* 歷史檢視模式 */
+                                    <div class="text-xs md:text-sm">
+                                        每位學生材料費 <span class="font-bold border-b border-black px-3">{selectedHistory.materialFee || "＿＿"}</span> 元。
+                                    </div>
+                                ) : (
+                                    /* 編輯器模式 */
+                                    <div class="flex flex-wrap items-center gap-1.5 text-xs md:text-sm">
+                                        <span class="font-bold text-slate-800 no-print">材料費用：</span>
+                                        <span>每位學生材料費</span>
+                                        <input 
+                                            type="text" 
+                                            value={materialFee} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setMaterialFee(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, e.target.value, returnTime);
+                                            }}
+                                            placeholder="200" 
+                                            class={`border-b border-dashed border-slate-400 outline-none px-2 py-0.5 text-center bg-slate-50 font-bold w-20 text-xs md:text-sm print:border-b print:border-black print:bg-transparent ${isAdmin ? 'focus:border-green-600' : 'cursor-not-allowed'}`}
+                                        />
+                                        <span>元。</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 實作成品準備資訊欄 */}
+                            <div class="text-sm text-slate-700 print:text-black leading-relaxed border-t border-dashed border-slate-200 pt-3 print:border-none print:pt-1">
+                                {selectedHistory ? (
+                                    /* 歷史檢視模式 */
+                                    <div class="text-xs md:text-sm">
+                                        請 <span class="font-bold border-b border-black px-3">{selectedHistory.prepTeachers || "＿＿＿＿"}</span> 老師準備實作成品 <span class="font-bold border-b border-black px-3">{selectedHistory.prepCount || "＿"}</span> 份給當天國中帶隊教師。
+                                    </div>
+                                ) : (
+                                    /* 編輯器模式 */
+                                    <div class="flex flex-wrap items-center gap-1.5 text-xs md:text-sm">
+                                        <span class="font-bold text-slate-800 no-print">成品備製：</span>
+                                        <span>請</span>
+                                        <input 
+                                            type="text" 
+                                            value={prepTeachers} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setPrepTeachers(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, semester, remarks, rows, e.target.value, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="請填寫授課老師" 
+                                            class={`border-b border-dashed border-slate-400 outline-none px-2 py-0.5 text-center bg-slate-50 font-semibold w-56 text-xs md:text-sm print:border-b print:border-black print:bg-transparent ${isAdmin ? 'focus:border-green-600' : 'cursor-not-allowed'}`}
+                                        />
+                                        <span>老師準備實作成品</span>
+                                        <input 
+                                            type="text" 
+                                            value={prepCount} 
+                                            readOnly={!isAdmin}
+                                            onChange={(e) => {
+                                                setPrepCount(e.target.value);
+                                                saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, e.target.value, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                            }}
+                                            placeholder="份數" 
+                                            class={`border-b border-dashed border-slate-400 outline-none px-2 py-0.5 text-center bg-slate-50 font-bold w-16 text-xs md:text-sm print:border-b print:border-black print:bg-transparent ${isAdmin ? 'focus:border-green-600' : 'cursor-not-allowed'}`}
+                                        />
+                                        <span>份給當天國中帶隊教師。</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 核銷方式欄 */}
+                            <div class="text-sm text-slate-700 print:text-black leading-relaxed border-t border-dashed border-slate-200 pt-3 print:border-none print:pt-1">
+                                {selectedHistory ? (
+                                    /* 歷史檢視模式 */
+                                    <div class="text-xs md:text-sm font-semibold flex items-center gap-4">
+                                        <span>核銷方式：</span>
+                                        <span>{selectedHistory.verificationMethod === "國中核銷" ? "☑ 國中核銷" : "☐ 國中核銷"}</span>
+                                        <span>{selectedHistory.verificationMethod === "本校核銷" ? "☑ 本校核銷" : "☐ 本校核銷"}</span>
+                                    </div>
+                                ) : (
+                                    /* 編輯器模式 */
+                                    <div class="flex flex-wrap items-center gap-4 text-xs md:text-sm">
+                                        <span class="font-bold text-slate-800">核銷方式：</span>
+                                        
+                                        {/* 網頁端單選鈕 */}
+                                        <div class="no-print flex items-center gap-4">
+                                            <label class={`flex items-center gap-1.5 ${isAdmin ? 'cursor-pointer' : 'cursor-not-allowed opacity-75'}`}>
+                                                <input 
+                                                    type="radio" 
+                                                    name="verifMethod" 
+                                                    value="國中核銷" 
+                                                    disabled={!isAdmin}
+                                                    checked={verificationMethod === "國中核銷"} 
+                                                    onChange={(e) => {
+                                                        setVerificationMethod(e.target.value);
+                                                        saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, e.target.value, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                                    }}
+                                                    class="text-green-600 focus:ring-green-500 w-4 h-4"
+                                                />
+                                                <span class="font-medium">國中核銷</span>
+                                            </label>
+                                            <label class={`flex items-center gap-1.5 ${isAdmin ? 'cursor-pointer' : 'cursor-not-allowed opacity-75'}`}>
+                                                <input 
+                                                    type="radio" 
+                                                    name="verifMethod" 
+                                                    value="本校核銷" 
+                                                    disabled={!isAdmin}
+                                                    checked={verificationMethod === "本校核銷"} 
+                                                    onChange={(e) => {
+                                                        setVerificationMethod(e.target.value);
+                                                        saveDataToLocal(academicYear, schoolName, semester, remarks, rows, prepTeachers, prepCount, e.target.value, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                                    }}
+                                                    class="text-green-600 focus:ring-green-500 w-4 h-4"
+                                                />
+                                                <span class="font-medium">本校核銷</span>
+                                            </label>
+                                        </div>
+
+                                        {/* 列印端純文字方塊樣式 */}
+                                        <div class="hidden print:flex items-center gap-6">
+                                            <span>{verificationMethod === "國中核銷" ? "☑ 國中核銷" : "☐ 國中核銷"}</span>
+                                            <span>{verificationMethod === "本校核銷" ? "☑ 本校核銷" : "☐ 本校核銷"}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 與表格等寬的整合大備註說明欄位 */}
+                        <div class="mt-4 border border-slate-400 print:border-black bg-white rounded-lg p-3 text-left w-full shadow-xs print:shadow-none">
+                            <div class="font-bold text-slate-700 print:text-black mb-1.5 flex items-center gap-1.5 text-xs md:text-sm no-print">
+                                <i data-lucide="clipboard-list" class="w-4 h-4 text-green-600"></i>
+                                <span>整張報表備註與補充說明 (將與表格同寬列印)：</span>
+                            </div>
+                            
+                            {selectedHistory ? (
+                                /* 歷史檢視模式 */
+                                <div class="text-xs text-slate-800 print:text-black whitespace-pre-line leading-relaxed min-h-[50px] font-medium">
+                                    {selectedHistory.remarks || "（無備註內容）"}
+                                </div>
+                            ) : (
+                                /* 編輯器模式 */
+                                <textarea
+                                    value={remarks}
+                                    readOnly={!isAdmin}
+                                    onChange={(e) => {
+                                        setRemarks(e.target.value);
+                                        saveDataToLocal(academicYear, schoolName, semester, e.target.value, rows, prepTeachers, prepCount, verificationMethod, assemblyTime, unifiedDate, unifiedTimeSlot, materialFee, returnTime);
+                                    }}
+                                    placeholder="在此輸入這張報表底部的整體備註事項..."
+                                    rows="5"
+                                    class={`w-full text-xs md:text-sm p-2 border border-slate-200 rounded outline-none resize-y text-slate-700 print:text-black print:border-none print:p-0 leading-relaxed bg-slate-50/50 transition-all font-mono ${isAdmin ? 'focus:border-green-500 focus:bg-white' : 'cursor-not-allowed bg-slate-100/50'}`}
+                                />
+                            )}
+                        </div>
+
+                    </div>
+
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('app'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
